@@ -68,7 +68,9 @@ const corsOptions = {
 };
 
 // Handle ALL preflight OPTIONS requests before any other middleware
-server.options("*", cors(corsOptions));
+// NOTE: server.options("*", ...) is NOT used here — Express 5 / path-to-regexp v8
+// does not accept bare '*' as a route pattern (throws TypeError at startup).
+// app.use(cors(corsOptions)) below already handles OPTIONS preflight automatically.
 
 // Apply CORS to every request — BEFORE cookieParser / express.json / routes
 server.use(cors(corsOptions));
