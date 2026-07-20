@@ -1,7 +1,5 @@
-// ─── STEP 1: Load environment variables FIRST — before any other import ────────
 import "dotenv/config";
 
-// ─── STEP 2: Validate all required environment variables at startup ─────────────
 const REQUIRED_ENV = [
     "JWT_SECRET",
     "CRYPTR_SECRET",
@@ -19,13 +17,9 @@ const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
 if (missing.length > 0) {
     console.error("\n[Startup] ❌  Missing required environment variables:");
     missing.forEach((key) => console.error(`   • ${key}`));
-    console.error(
-        "\n   Add the missing variables to backend/.env and restart the server.\n"
-    );
     process.exit(1);
 }
 
-// ─── STEP 3: Application imports (env is guaranteed set by this point) ──────────
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -42,40 +36,43 @@ import dashboardRouter from "./routers/dashboard.router.js";
 
 const server = express();
 
-// ─── CORS — must be FIRST middleware so OPTIONS preflight is handled ───────────
-// All allowed origins: Vercel production + any env-configured origins + localhost
+// ─── Allowed Origins ──────────────────────────────────────────────────────────
 const allowedOrigins = [
-    "https://nestro-frontend-chi.vercel.app",   // Vercel production (hardcoded as safety net)
-    process.env.CLIENT_URL,                      // e.g. https://nestro-frontend-chi.vercel.app
-    process.env.CORS,                            // optional extra origin from env
-    "http://localhost:3000",
-    "http://localhost:3001",
-].filter(Boolean);
+    ...new Set([
+        "https://nestro-frontend-chi.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+        process.env.CLIENT_URL,
+        process.env.CORS,
+    ].filter(Boolean))
+];
 
+console.log("[Server] Allowed origins:", allowedOrigins);
+
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow server-to-server / Postman (no origin header) + whitelisted origins
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
+            console.warn(`[CORS] Blocked: "${origin}"`);
             callback(new Error(`CORS: origin "${origin}" is not allowed`));
         }
     },
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "Cookie",
+        "X-Requested-With",
+    ],
+    exposedHeaders: ["Set-Cookie"],
     credentials: true,
-    optionsSuccessStatus: 200, // some legacy browsers (IE11) choke on 204
+    optionsSuccessStatus: 200,
 };
 
-// Handle ALL preflight OPTIONS requests before any other middleware
-// NOTE: server.options("*", ...) is NOT used here — Express 5 / path-to-regexp v8
-// does not accept bare '*' as a route pattern (throws TypeError at startup).
-// app.use(cors(corsOptions)) below already handles OPTIONS preflight automatically.
-
-// Apply CORS to every request — BEFORE cookieParser / express.json / routes
-server.use(cors(corsOptions));
-
-// ─── Other Middleware ──────────────────────────────────────────────────────────
+// ─── Middleware ───────────────────────────────────────────────────────────────
+server.use(cors(corsOptions));  // ✅ Ye khud OPTIONS handle karta hai
 server.use(cookieParser());
 server.use(express.json());
 server.use(express.urlencoded({ extended: true }));
@@ -91,9 +88,27 @@ server.use("/api/address", addressRouter);
 server.use("/api/contact", contactRouter);
 server.use("/api/admin", dashboardRouter);
 
-// ─── Global error handler ─────────────────────────────────────────────────────
+// ─── Health Check ─────────────────────────────────────────────────────────────
+server.get("/health", (req, res) => {
+    res.status(200).json({
+        success: true,
+        message: "Server is running",
+        timestamp: new Date().toISOString(),
+        uptime: Math.floor(process.uptime()),
+    });
+});
+
+// ─── Global Error Handler ─────────────────────────────────────────────────────
 server.use((err, req, res, next) => {
     console.error("[Express Error]", err.message);
+
+    if (err.message?.startsWith("CORS:")) {
+        return res.status(403).json({
+            success: false,
+            message: err.message,
+        });
+    }
+
     res.status(err.status || 500).json({
         success: false,
         message: err.message || "Internal server error",
@@ -105,7 +120,7 @@ async function main() {
     await connectDB();
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
-        // console.log(`[Server] ✅  Running on http://localhost:${PORT}`);
+        console.log(`[Server] ✅  Running on port ${PORT}`);
     });
 }
 
