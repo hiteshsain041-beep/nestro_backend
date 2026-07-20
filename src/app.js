@@ -42,31 +42,41 @@ import dashboardRouter from "./routers/dashboard.router.js";
 
 const server = express();
 
-// ─── Middleware ────────────────────────────────────────────────────────────────
-server.use(cookieParser());
-server.use(express.json());
-server.use(express.urlencoded({ extended: true }));
-
+// ─── CORS — must be FIRST middleware so OPTIONS preflight is handled ───────────
+// All allowed origins: Vercel production + any env-configured origins + localhost
 const allowedOrigins = [
-    process.env.CLIENT_URL,
-    process.env.CORS,
+    "https://nestro-frontend-chi.vercel.app",   // Vercel production (hardcoded as safety net)
+    process.env.CLIENT_URL,                      // e.g. https://nestro-frontend-chi.vercel.app
+    process.env.CORS,                            // optional extra origin from env
     "http://localhost:3000",
     "http://localhost:3001",
 ].filter(Boolean);
 
-server.use(
-    cors({
-        origin: (origin, callback) => {
-            // Allow server-to-server requests (no origin) and whitelisted origins
-            if (!origin || allowedOrigins.includes(origin)) {
-                callback(null, true);
-            } else {
-                callback(new Error(`CORS: origin "${origin}" is not allowed`));
-            }
-        },
-        credentials: true,
-    })
-);
+const corsOptions = {
+    origin: (origin, callback) => {
+        // Allow server-to-server / Postman (no origin header) + whitelisted origins
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error(`CORS: origin "${origin}" is not allowed`));
+        }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true,
+    optionsSuccessStatus: 200, // some legacy browsers (IE11) choke on 204
+};
+
+// Handle ALL preflight OPTIONS requests before any other middleware
+server.options("*", cors(corsOptions));
+
+// Apply CORS to every request — BEFORE cookieParser / express.json / routes
+server.use(cors(corsOptions));
+
+// ─── Other Middleware ──────────────────────────────────────────────────────────
+server.use(cookieParser());
+server.use(express.json());
+server.use(express.urlencoded({ extended: true }));
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 server.use("/api/category", categoryRouter);
