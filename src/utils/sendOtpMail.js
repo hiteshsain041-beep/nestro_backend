@@ -4,19 +4,20 @@ import nodemailer from "nodemailer";
  * Send a transactional email via Gmail SMTP (Nodemailer).
  *
  * Supports two call signatures:
- *   sendOtpMail(toEmail, otp)                — registration / resend OTP
+ *   sendOtpMail(toEmail, otp)                — registration / resend OTP (default template)
  *   sendOtpMail(toEmail, subject, htmlBody)   — custom subject + body (forgot-password etc.)
  *
  * Required env vars:
- *   EMAIL_USER      — full Gmail address  (e.g. you@gmail.com)
- *   EMAIL_PASS      — 16-char Gmail App Password  (NOT your regular password)
- *   EMAIL_FROM_NAME — (optional) display name, defaults to "Nestro"
+ *   EMAIL_USER       — full Gmail address  (e.g. you@gmail.com)
+ *   EMAIL_PASS       — 16-char Gmail App Password  (NOT your regular password)
+ *   EMAIL_SMTP_PORT  — (optional) SMTP port, defaults to 465
+ *   EMAIL_FROM_NAME  — (optional) display name, defaults to "Nestro"
  *
  * Gmail setup:
  *   1. Enable 2-Step Verification on the account.
  *   2. Go to https://myaccount.google.com/apppasswords
  *   3. Create an App Password — copy the 16 characters (no spaces).
- *   4. Set EMAIL_PASS=<16chars> in .env / Render env vars.
+ *   4. Set EMAIL_PASS=<16chars> in Render env vars (no quotes, no spaces).
  */
 
 // Warn at import time — surfaces config problems immediately on server start
@@ -28,8 +29,9 @@ if (!process.env.EMAIL_PASS) {
 }
 
 // ── Cached transporter — created once, reused for all requests ────────────────
-// Using explicit SMTP settings instead of service:"gmail" for reliability on
-// cloud platforms (Render). family:4 forces IPv4 to avoid ENETUNREACH on IPv6.
+// Port 465 with secure:true uses SSL/TLS from the start (no STARTTLS upgrade).
+// This is more reliable than port 587 on cloud platforms where STARTTLS handshake
+// can time out. family:4 forces IPv4 DNS to prevent ENETUNREACH on Render.
 let _transporter = null;
 
 function getTransporter() {
@@ -37,13 +39,12 @@ function getTransporter() {
 
   _transporter = nodemailer.createTransport({
     host: "smtp.gmail.com",
-    port: 587,
-    secure: false,          // STARTTLS (not SSL)
-    requireTLS: true,           // force TLS upgrade — reject plaintext
-    family: 4,              // force IPv4 — avoids ENETUNREACH on Render
-    connectionTimeout: 30_000,        // 30 s to establish TCP connection
-    greetingTimeout: 15_000,        // 15 s for SMTP greeting
-    socketTimeout: 30_000,        // 30 s for socket inactivity
+    port: Number(process.env.EMAIL_SMTP_PORT || 465),
+    secure: true,          // SSL/TLS from connection start (port 465)
+    family: 4,             // force IPv4 — avoids ENETUNREACH on Render
+    connectionTimeout: 60_000,        // 60 s to establish TCP connection
+    greetingTimeout: 30_000,        // 30 s for SMTP greeting
+    socketTimeout: 60_000,        // 60 s for socket inactivity
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
@@ -101,14 +102,14 @@ const sendOtpMail = async (toEmail, subjectOrOtp, htmlBody) => {
     throw new Error("EMAIL_PASS is not configured in env vars");
   }
 
-  // ── Resolve subject + html ───────────────────────────────────────────────
-  // 2-arg: sendOtpMail(email, otp)          → default template
-  // 3-arg: sendOtpMail(email, subject, html) → custom
+  // ── Resolve subject + html from call signature ───────────────────────────
+  // 2-arg: sendOtpMail(email, otp)           → use default branded template
+  // 3-arg: sendOtpMail(email, subject, html)  → use caller-provided content
   const isCustom = typeof htmlBody === "string" && htmlBody.trim().length > 0;
   const subject = isCustom ? subjectOrOtp : "Your Nestro Verification Code";
   const html = isCustom ? htmlBody : buildDefaultHtml(subjectOrOtp);
 
-  // Plain-text fallback — extracted from HTML for email clients that need it
+  // Plain-text fallback for email clients that don't render HTML
   const text = isCustom
     ? subject
     : `Your Nestro OTP code is: ${subjectOrOtp}\nIt expires in 3 minutes.\nIf you didn't request this, ignore this email.`;
@@ -132,30 +133,30 @@ const sendOtpMail = async (toEmail, subjectOrOtp, htmlBody) => {
   } catch (err) {
     console.error(`[sendOtpMail] ❌ Failed to send to ${toEmail}:`, err.message);
 
-    // ── Actionable error messages for common Gmail failures ──────────────
-    if (err.code === "ENETUNREACH" || err.code === "ETIMEDOUT") {
+    // ── Actionable error messages for common Gmail/network failures ───────
+    if (err.code === "ETIMEDOUT" || err.code === "ENETUNREACH") {
       throw new Error(
-        `Gmail SMTP connection failed (${err.code}). ` +
-        "Check that Render allows outbound TCP on port 587, " +
-        "or try port 465 with secure:true."
+        `Gmail SMTP connection failed (${err.code}) on port ${process.env.EMAIL_SMTP_PORT || 465}. ` +
+        "Ensure Render allows outbound TCP on port 465. " +
+        "Alternatively set EMAIL_SMTP_PORT=587 and check if port 587 is reachable."
       );
     }
     if (err.message?.includes("535") || err.message?.includes("BadCredentials")) {
       throw new Error(
         "Gmail authentication failed (535 BadCredentials). " +
-        "EMAIL_PASS must be a 16-character Gmail App Password, NOT your regular password. " +
+        "EMAIL_PASS must be a 16-character Gmail App Password — NOT your regular Gmail password. " +
         "Generate one at https://myaccount.google.com/apppasswords"
       );
     }
     if (err.message?.includes("534") || err.message?.includes("Application-specific")) {
       throw new Error(
         "Gmail requires an App Password. " +
-        "Enable 2-Step Verification, then generate an App Password at " +
-        "https://myaccount.google.com/apppasswords"
+        "Enable 2-Step Verification at myaccount.google.com/security, " +
+        "then generate an App Password at https://myaccount.google.com/apppasswords"
       );
     }
 
-    throw err; // re-throw everything else unchanged
+    throw err; // re-throw all other errors unchanged
   }
 };
 
