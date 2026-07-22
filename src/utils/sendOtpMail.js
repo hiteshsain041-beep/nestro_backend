@@ -1,31 +1,68 @@
+import nodemailer from "nodemailer";
+
 /**
- * sendOtpMail — sends transactional email via Brevo REST API (no SDK).
+ * Send a transactional email via Gmail SMTP (Nodemailer).
  *
  * Supports two call signatures:
- *   sendOtpMail(toEmail, otp)               — registration / resend OTP
- *   sendOtpMail(toEmail, subject, htmlBody)  — custom subject + body
+ *   sendOtpMail(toEmail, otp)                — registration / resend OTP
+ *   sendOtpMail(toEmail, subject, htmlBody)   — custom subject + body (forgot-password etc.)
  *
  * Required env vars:
- *   BREVO_API_KEY      — Brevo API key (Settings → API Keys)
- *   BREVO_SENDER_EMAIL — verified sender address in Brevo
- *   BREVO_SENDER_NAME  — (optional) display name, defaults to "Nestro"
+ *   EMAIL_USER      — full Gmail address  (e.g. you@gmail.com)
+ *   EMAIL_PASS      — 16-char Gmail App Password  (NOT your regular password)
+ *   EMAIL_FROM_NAME — (optional) display name, defaults to "Nestro"
+ *
+ * Gmail setup:
+ *   1. Enable 2-Step Verification on the account.
+ *   2. Go to https://myaccount.google.com/apppasswords
+ *   3. Create an App Password — copy the 16 characters (no spaces).
+ *   4. Set EMAIL_PASS=<16chars> in .env / Render env vars.
  */
 
-// Warn at import time if config is missing
-if (!process.env.BREVO_API_KEY) {
-  console.error("[sendOtpMail] ⚠️  BREVO_API_KEY is not set in .env");
+// Warn at import time — surfaces config problems immediately on server start
+if (!process.env.EMAIL_USER) {
+  console.error("[sendOtpMail] ⚠️  EMAIL_USER is not set in env vars");
 }
-if (!process.env.BREVO_SENDER_EMAIL) {
-  console.error("[sendOtpMail] ⚠️  BREVO_SENDER_EMAIL is not set in .env");
+if (!process.env.EMAIL_PASS) {
+  console.error("[sendOtpMail] ⚠️  EMAIL_PASS is not set in env vars");
 }
 
-const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
+// ── Cached transporter — created once, reused for all requests ────────────────
+// Using explicit SMTP settings instead of service:"gmail" for reliability on
+// cloud platforms (Render). family:4 forces IPv4 to avoid ENETUNREACH on IPv6.
+let _transporter = null;
 
-// ── Default OTP HTML template ─────────────────────────────────────────────────
+function getTransporter() {
+  if (_transporter) return _transporter;
+
+  _transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,          // STARTTLS (not SSL)
+    requireTLS: true,           // force TLS upgrade — reject plaintext
+    family: 4,              // force IPv4 — avoids ENETUNREACH on Render
+    connectionTimeout: 30_000,        // 30 s to establish TCP connection
+    greetingTimeout: 15_000,        // 15 s for SMTP greeting
+    socketTimeout: 30_000,        // 30 s for socket inactivity
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+    tls: {
+      servername: "smtp.gmail.com",
+      minVersion: "TLSv1.2",
+    },
+  });
+
+  return _transporter;
+}
+
+// ── Branded OTP HTML template ─────────────────────────────────────────────────
 function buildDefaultHtml(otp) {
   return `
     <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#faf8f5;padding:40px 20px;">
-      <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(58,36,24,0.08);">
+      <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;
+                  box-shadow:0 4px 24px rgba(58,36,24,0.08);">
         <div style="background:#2b180f;padding:28px 32px;text-align:center;">
           <h1 style="color:#ffffff;font-size:22px;letter-spacing:6px;margin:0;font-weight:700;">NESTRO.</h1>
         </div>
@@ -35,9 +72,13 @@ function buildDefaultHtml(otp) {
             Use the OTP below to complete your verification.
             It expires in <strong>3 minutes</strong>.
           </p>
-          <div style="background:#faf0e8;border:2px dashed #d9b48b;border-radius:16px;padding:24px;text-align:center;margin-bottom:28px;">
-            <p style="color:#9a8a7a;font-size:12px;letter-spacing:3px;text-transform:uppercase;margin:0 0 8px;">Your OTP Code</p>
-            <h1 style="color:#3a2418;font-size:42px;letter-spacing:10px;margin:0;font-weight:800;font-family:monospace;">${otp}</h1>
+          <div style="background:#faf0e8;border:2px dashed #d9b48b;border-radius:16px;
+                      padding:24px;text-align:center;margin-bottom:28px;">
+            <p style="color:#9a8a7a;font-size:12px;letter-spacing:3px;text-transform:uppercase;margin:0 0 8px;">
+              Your OTP Code
+            </p>
+            <h1 style="color:#3a2418;font-size:42px;letter-spacing:10px;margin:0;
+                       font-weight:800;font-family:monospace;">${otp}</h1>
           </div>
           <p style="color:#9a8a7a;font-size:13px;line-height:1.6;margin:0;">
             If you didn't request this, you can safely ignore this email.
@@ -47,95 +88,75 @@ function buildDefaultHtml(otp) {
           <p style="color:#c9b9a8;font-size:12px;margin:0;">&#169; 2026 Nestro &middot; Curated Furniture</p>
         </div>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
-// ── Main function ─────────────────────────────────────────────────────────────
+// ── Main export ───────────────────────────────────────────────────────────────
 const sendOtpMail = async (toEmail, subjectOrOtp, htmlBody) => {
-  // ── Validate env vars ────────────────────────────────────────────────────
-  if (!process.env.BREVO_API_KEY) {
-    throw new Error("BREVO_API_KEY is not configured in .env");
+  // ── Runtime guards ───────────────────────────────────────────────────────
+  if (!process.env.EMAIL_USER) {
+    throw new Error("EMAIL_USER is not configured in env vars");
   }
-  if (!process.env.BREVO_SENDER_EMAIL) {
-    throw new Error("BREVO_SENDER_EMAIL is not configured in .env");
-  }
-
-  // ── Validate recipient ───────────────────────────────────────────────────
-  if (!toEmail || typeof toEmail !== "string" || !toEmail.includes("@")) {
-    throw new Error(`sendOtpMail: invalid recipient email — "${toEmail}"`);
+  if (!process.env.EMAIL_PASS) {
+    throw new Error("EMAIL_PASS is not configured in env vars");
   }
 
-  // ── Resolve subject + html from call signature ───────────────────────────
-  // 2-arg call: sendOtpMail(email, otp)         → use default template
-  // 3-arg call: sendOtpMail(email, subject, html)→ use provided subject + html
+  // ── Resolve subject + html ───────────────────────────────────────────────
+  // 2-arg: sendOtpMail(email, otp)          → default template
+  // 3-arg: sendOtpMail(email, subject, html) → custom
   const isCustom = typeof htmlBody === "string" && htmlBody.trim().length > 0;
   const subject = isCustom ? subjectOrOtp : "Your Nestro Verification Code";
   const html = isCustom ? htmlBody : buildDefaultHtml(subjectOrOtp);
 
-  // ── Build request payload ────────────────────────────────────────────────
-  const payload = {
-    sender: {
-      name: process.env.BREVO_SENDER_NAME || "Nestro",
-      email: process.env.BREVO_SENDER_EMAIL,
-    },
-    to: [{ email: toEmail }],
+  // Plain-text fallback — extracted from HTML for email clients that need it
+  const text = isCustom
+    ? subject
+    : `Your Nestro OTP code is: ${subjectOrOtp}\nIt expires in 3 minutes.\nIf you didn't request this, ignore this email.`;
+
+  const fromName = process.env.EMAIL_FROM_NAME || "Nestro";
+
+  const mailOptions = {
+    from: `"${fromName}" <${process.env.EMAIL_USER}>`,
+    to: toEmail,
     subject,
-    htmlContent: html,
+    html,
+    text,
   };
 
-  // ── 30-second timeout via AbortController ────────────────────────────────
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30_000);
-
-  let response;
+  // ── Send ─────────────────────────────────────────────────────────────────
   try {
-    response = await fetch(BREVO_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "api-key": process.env.BREVO_API_KEY,
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-  } catch (fetchErr) {
-    clearTimeout(timer);
-    if (fetchErr.name === "AbortError") {
-      throw new Error("Brevo email failed: request timed out after 30 seconds");
+    const transporter = getTransporter();
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[sendOtpMail] ✅ Email sent to ${toEmail} | messageId: ${info.messageId}`);
+    return { success: true, messageId: info.messageId };
+  } catch (err) {
+    console.error(`[sendOtpMail] ❌ Failed to send to ${toEmail}:`, err.message);
+
+    // ── Actionable error messages for common Gmail failures ──────────────
+    if (err.code === "ENETUNREACH" || err.code === "ETIMEDOUT") {
+      throw new Error(
+        `Gmail SMTP connection failed (${err.code}). ` +
+        "Check that Render allows outbound TCP on port 587, " +
+        "or try port 465 with secure:true."
+      );
     }
-    throw new Error(`Brevo email failed: network error — ${fetchErr.message}`);
-  }
-  clearTimeout(timer);
+    if (err.message?.includes("535") || err.message?.includes("BadCredentials")) {
+      throw new Error(
+        "Gmail authentication failed (535 BadCredentials). " +
+        "EMAIL_PASS must be a 16-character Gmail App Password, NOT your regular password. " +
+        "Generate one at https://myaccount.google.com/apppasswords"
+      );
+    }
+    if (err.message?.includes("534") || err.message?.includes("Application-specific")) {
+      throw new Error(
+        "Gmail requires an App Password. " +
+        "Enable 2-Step Verification, then generate an App Password at " +
+        "https://myaccount.google.com/apppasswords"
+      );
+    }
 
-  // ── Parse response safely ────────────────────────────────────────────────
-  const raw = await response.text();
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // Response was not JSON — use raw text for error reporting
+    throw err; // re-throw everything else unchanged
   }
-
-  // ── Handle non-2xx ───────────────────────────────────────────────────────
-  if (!response.ok) {
-    const brevoMessage =
-      parsed?.message ||
-      parsed?.error ||
-      raw ||
-      `HTTP ${response.status}`;
-    console.error(
-      `[sendOtpMail] ❌ Brevo API error ${response.status} sending to ${toEmail}:`,
-      brevoMessage
-    );
-    throw new Error(`Brevo email failed: ${brevoMessage}`);
-  }
-
-  // ── Success ──────────────────────────────────────────────────────────────
-  const messageId = parsed?.messageId ?? "unknown";
-  console.log(`[sendOtpMail] ✅ Email sent to ${toEmail} | messageId: ${messageId}`);
-  return { success: true, messageId };
 };
 
 export default sendOtpMail;

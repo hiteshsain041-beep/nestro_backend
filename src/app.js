@@ -1,11 +1,15 @@
 import "dotenv/config";
+import dns from "node:dns";
+
+// Force IPv4 DNS resolution — prevents ENETUNREACH on Render (IPv6 not routable)
+dns.setDefaultResultOrder("ipv4first");
 
 const REQUIRED_ENV = [
     "JWT_SECRET",
     "CRYPTR_SECRET",
     "MONGODB_URL",
-    "BREVO_API_KEY",
-    "BREVO_SENDER_EMAIL",
+    "EMAIL_USER",
+    "EMAIL_PASS",
     "CLOUD_NAME",
     "API_KEY",
     "CLOUDINARY_SECRET",
