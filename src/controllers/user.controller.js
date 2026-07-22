@@ -12,6 +12,39 @@ import sendOtpMail from "../utils/sendOtpMail.js";
 import Cryptr from "cryptr";
 import generateToken from "../utils/generateToken.js";
 
+// ─── Reusable OTP email HTML builder ─────────────────────────────────────────
+/**
+ * buildOtpEmailHtml(otp, heading, subtext)
+ * Generates a branded Nestro HTML email with the OTP in a highlighted box.
+ */
+function buildOtpEmailHtml(otp, heading, subtext) {
+  return `
+    <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#faf8f5;padding:40px 20px;">
+      <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(58,36,24,0.08);">
+        <div style="background:#2b180f;padding:28px 32px;text-align:center;">
+          <h1 style="color:#ffffff;font-size:22px;letter-spacing:6px;margin:0;font-weight:700;">NESTRO.</h1>
+        </div>
+        <div style="padding:36px 32px;">
+          <h2 style="color:#1a1007;font-size:20px;margin:0 0 8px;">${heading}</h2>
+          <p style="color:#9a8a7a;font-size:14px;margin:0 0 28px;line-height:1.6;">
+            ${subtext}
+          </p>
+          <div style="background:#faf0e8;border:2px dashed #d9b48b;border-radius:16px;padding:24px;text-align:center;margin-bottom:28px;">
+            <p style="color:#9a8a7a;font-size:12px;letter-spacing:3px;text-transform:uppercase;margin:0 0 8px;">Your OTP Code</p>
+            <h1 style="color:#3a2418;font-size:42px;letter-spacing:10px;margin:0;font-weight:800;font-family:monospace;">${otp}</h1>
+          </div>
+          <p style="color:#9a8a7a;font-size:13px;line-height:1.6;margin:0;">
+            If you didn't request this, you can safely ignore this email.
+          </p>
+        </div>
+        <div style="border-top:1px solid #f0ebe4;padding:20px 32px;text-align:center;">
+          <p style="color:#c9b9a8;font-size:12px;margin:0;">&#169; 2026 Nestro &middot; Curated Furniture</p>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 // ─── Cryptr singleton ─────────────────────────────────────────────────────────
 // Lazily initialised so dotenv is guaranteed to have run before we read the var.
 // Using CRYPTR_SECRET (separate from JWT_SECRET — different concerns).
@@ -69,33 +102,15 @@ const register = async (req, res) => {
     const otpExpire = Date.now() + 3 * 60 * 1000; // 3 minutes
 
     // Send OTP email before persisting — throws if Brevo fails
-    const registerHtml = `
-      <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#faf8f5;padding:40px 20px;">
-        <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(58,36,24,0.08);">
-          <div style="background:#2b180f;padding:28px 32px;text-align:center;">
-            <h1 style="color:#ffffff;font-size:22px;letter-spacing:6px;margin:0;font-weight:700;">NESTRO.</h1>
-          </div>
-          <div style="padding:36px 32px;">
-            <h2 style="color:#1a1007;font-size:20px;margin:0 0 8px;">Verify Your Email</h2>
-            <p style="color:#9a8a7a;font-size:14px;margin:0 0 28px;line-height:1.6;">
-              Use the OTP below to complete your registration.
-              It expires in <strong>3 minutes</strong>.
-            </p>
-            <div style="background:#faf0e8;border:2px dashed #d9b48b;border-radius:16px;padding:24px;text-align:center;margin-bottom:28px;">
-              <p style="color:#9a8a7a;font-size:12px;letter-spacing:3px;text-transform:uppercase;margin:0 0 8px;">Your OTP Code</p>
-              <h1 style="color:#3a2418;font-size:42px;letter-spacing:10px;margin:0;font-weight:800;font-family:monospace;">${otp}</h1>
-            </div>
-            <p style="color:#9a8a7a;font-size:13px;line-height:1.6;margin:0;">
-              If you didn't request this, you can safely ignore this email.
-            </p>
-          </div>
-          <div style="border-top:1px solid #f0ebe4;padding:20px 32px;text-align:center;">
-            <p style="color:#c9b9a8;font-size:12px;margin:0;">&#169; 2026 Nestro &middot; Curated Furniture</p>
-          </div>
-        </div>
-      </div>
-    `;
-    await sendOtpMail(email, "Your Nestro Verification Code", registerHtml);
+    await sendOtpMail(
+      email.toLowerCase(),
+      "Nestro — Verify your email",
+      buildOtpEmailHtml(
+        otp,
+        "Verify Your Email",
+        "Use the OTP below to complete your Nestro account verification. It expires in <strong>3 minutes</strong>."
+      )
+    );
 
     const passwordHash = getCryptr().encrypt(password);
 
@@ -173,32 +188,15 @@ const resendOtp = async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000);
     const otpExpire = Date.now() + 3 * 60 * 1000;
 
-    const resendHtml = `
-      <div style="font-family:'Helvetica Neue',Arial,sans-serif;background:#faf8f5;padding:40px 20px;">
-        <div style="max-width:480px;margin:0 auto;background:#ffffff;border-radius:20px;overflow:hidden;box-shadow:0 4px 24px rgba(58,36,24,0.08);">
-          <div style="background:#2b180f;padding:28px 32px;text-align:center;">
-            <h1 style="color:#ffffff;font-size:22px;letter-spacing:6px;margin:0;font-weight:700;">NESTRO.</h1>
-          </div>
-          <div style="padding:36px 32px;">
-            <h2 style="color:#1a1007;font-size:20px;margin:0 0 8px;">New Verification Code</h2>
-            <p style="color:#9a8a7a;font-size:14px;margin:0 0 28px;line-height:1.6;">
-              Here is your new OTP. It expires in <strong>3 minutes</strong>.
-            </p>
-            <div style="background:#faf0e8;border:2px dashed #d9b48b;border-radius:16px;padding:24px;text-align:center;margin-bottom:28px;">
-              <p style="color:#9a8a7a;font-size:12px;letter-spacing:3px;text-transform:uppercase;margin:0 0 8px;">Your OTP Code</p>
-              <h1 style="color:#3a2418;font-size:42px;letter-spacing:10px;margin:0;font-weight:800;font-family:monospace;">${otp}</h1>
-            </div>
-            <p style="color:#9a8a7a;font-size:13px;line-height:1.6;margin:0;">
-              If you didn't request this, you can safely ignore this email.
-            </p>
-          </div>
-          <div style="border-top:1px solid #f0ebe4;padding:20px 32px;text-align:center;">
-            <p style="color:#c9b9a8;font-size:12px;margin:0;">&#169; 2026 Nestro &middot; Curated Furniture</p>
-          </div>
-        </div>
-      </div>
-    `;
-    await sendOtpMail(email, "Your New Nestro Verification Code", resendHtml);
+    await sendOtpMail(
+      email.toLowerCase(),
+      "Nestro — Your new verification OTP",
+      buildOtpEmailHtml(
+        otp,
+        "Your New OTP",
+        "Use the new OTP below to complete your Nestro account verification. It expires in <strong>3 minutes</strong>."
+      )
+    );
 
     user.otp = otp;
     user.otpExpire = otpExpire;
