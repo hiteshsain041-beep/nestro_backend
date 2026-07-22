@@ -211,7 +211,9 @@ const login = async (req, res) => {
       "-password -otp -otpExpire -__v"
     );
 
-    return sendSuccess(res, "Login successful", { user: safeUser });
+    // Include token in JSON body so the Next.js proxy route (/api/auth/login)
+    // can re-set the cookie on the frontend domain without parsing Set-Cookie headers
+    return sendSuccess(res, "Login successful", { user: safeUser, token });
   } catch (error) {
     console.error("[user.login]", error.message, error.stack);
     return sendServerError(res, error);
@@ -259,7 +261,9 @@ const googleLogin = async (req, res) => {
       "-password -otp -otpExpire -__v"
     );
 
-    return sendSuccess(res, "Google login successful", { user: safeUser });
+    // Include token in JSON body so the Next.js proxy route (/api/auth/login)
+    // can re-set the cookie on the frontend domain without parsing Set-Cookie headers
+    return sendSuccess(res, "Google login successful", { user: safeUser, token });
   } catch (error) {
     console.error("[user.googleLogin]", error.message, error.stack);
     return sendServerError(res, error);
