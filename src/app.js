@@ -8,8 +8,8 @@ const REQUIRED_ENV = [
     "JWT_SECRET",
     "CRYPTR_SECRET",
     "MONGODB_URL",
-    "EMAIL_USER",
-    "EMAIL_PASS",
+    "BREVO_API_KEY",
+    "BREVO_SENDER_EMAIL",
     "CLOUD_NAME",
     "API_KEY",
     "CLOUDINARY_SECRET",
@@ -100,6 +100,50 @@ server.get("/health", (req, res) => {
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
     });
+});
+
+// ─── Test Email (Brevo) ───────────────────────────────────────────────────────
+// GET /api/test-email?to=you@example.com
+// Works in ALL environments — use this to verify Brevo integration on Render
+server.get("/api/test-email", async (req, res) => {
+    const to = req.query.to;
+    if (!to || !to.includes("@")) {
+        return res.status(400).json({
+            success: false,
+            message: "Provide ?to=email@example.com in the query string",
+        });
+    }
+    try {
+        const { default: sendOtpMail } = await import("./utils/sendOtpMail.js");
+        const result = await sendOtpMail(
+            to,
+            "Nestro — Brevo Integration Test",
+            `<div style="font-family:Arial,sans-serif;padding:32px;background:#faf8f5;">
+              <h2 style="color:#2b180f;">✅ Brevo is Working!</h2>
+              <p style="color:#9a8a7a;">This test email confirms your Nestro backend
+              can send transactional emails via Brevo REST API.</p>
+              <p style="color:#c9b9a8;font-size:12px;">Sent at: ${new Date().toISOString()}<br>
+              Server: ${process.env.RENDER_SERVICE_NAME || "localhost"}</p>
+            </div>`
+        );
+        return res.json({
+            success: true,
+            message: `Test email sent successfully to ${to}`,
+            messageId: result.messageId,
+            brevoSenderEmail: process.env.BREVO_SENDER_EMAIL,
+            brevoKeyPrefix: (process.env.BREVO_API_KEY || "").slice(0, 12) + "...",
+        });
+    } catch (err) {
+        console.error("[test-email]", err.message);
+        return res.status(500).json({
+            success: false,
+            message: err.message,
+            brevoKeySet: Boolean(process.env.BREVO_API_KEY),
+            brevoSenderSet: Boolean(process.env.BREVO_SENDER_EMAIL),
+            brevoKeyPrefix: (process.env.BREVO_API_KEY || "").slice(0, 12) + "...",
+            tip: "Ensure BREVO_API_KEY and BREVO_SENDER_EMAIL are set in Render Environment Variables",
+        });
+    }
 });
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────

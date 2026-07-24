@@ -85,6 +85,7 @@ const ROLE_COOKIE_OPTIONS = {
 // POST /api/user/register
 // ─────────────────────────────────────────────────────────────────────────────
 const register = async (req, res) => {
+  console.log("[register] Hit — body:", { name: req.body?.name, email: req.body?.email });
   try {
     const { name, email, password } = req.body;
 
@@ -101,19 +102,8 @@ const register = async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000);
     const otpExpire = Date.now() + 3 * 60 * 1000; // 3 minutes
 
-    // Send OTP email before persisting — throws if Brevo fails
-    await sendOtpMail(
-      email.toLowerCase(),
-      "Nestro — Verify your email",
-      buildOtpEmailHtml(
-        otp,
-        "Verify Your Email",
-        "Use the OTP below to complete your Nestro account verification. It expires in <strong>3 minutes</strong>."
-      )
-    );
-
+    // Create user FIRST — so registration never fails due to email issues
     const passwordHash = getCryptr().encrypt(password);
-
     await UserModel.create({
       name,
       email: email.toLowerCase(),
@@ -121,14 +111,43 @@ const register = async (req, res) => {
       otp,
       otpExpire,
     });
+    console.log("[register] User created:", email.toLowerCase());
+
+    // Send OTP email — wrapped in try/catch so email failure never blocks response
+    let emailSent = true;
+    let emailError = null;
+    console.log("[register] Sending OTP email...");
+    try {
+      await sendOtpMail(
+        email.toLowerCase(),
+        "Nestro — Verify your email",
+        buildOtpEmailHtml(
+          otp,
+          "Verify Your Email",
+          "Use the OTP below to complete your Nestro account verification. It expires in <strong>3 minutes</strong>."
+        )
+      );
+      console.log("[register] OTP email sent successfully");
+    } catch (emailErr) {
+      emailSent = false;
+      emailError = emailErr.message;
+      console.error("[register] Email failed (non-fatal):", emailErr.message);
+    }
 
     return res.status(201).json({
       success: true,
       user: email.toLowerCase(),
-      message: "Registered successfully. Check your email for the OTP.",
+      message: emailSent
+        ? "Registered successfully. Check your email for the OTP."
+        : "Account created but email could not be sent. Please use Resend OTP.",
+      emailSent,
+      // Only expose email error detail in non-production for debugging
+      ...(process.env.NODE_ENV !== "production" && emailError
+        ? { emailError }
+        : {}),
     });
   } catch (error) {
-    console.error("[user.register]", error.message, error.stack);
+    console.error("[user.register] Error:", error.message, error.stack);
     return sendServerError(res, error);
   }
 };
